@@ -96,13 +96,13 @@ def add_archive(request):
 
 @login_required
 def view_archive(request, archive_id):
-    archive = get_object_or_404(Archive, pk=archive_id)
+    archive = get_object_or_404(Archive, pk=archive_id, user=request.user)
     return render(request, "archiver/view_archive.html", {"archive": archive})
 
 
 @login_required
 def edit_archive(request, archive_id):
-    archive = get_object_or_404(Archive, pk=archive_id)
+    archive = get_object_or_404(Archive, pk=archive_id,user=request.user)
 
     if request.method == "POST":
         archive.notes = request.POST.get("notes")
@@ -115,7 +115,7 @@ def edit_archive(request, archive_id):
 
 @login_required
 def delete_archive(request, archive_id):
-    archive = get_object_or_404(Archive, pk=archive_id)
+    archive = get_object_or_404(Archive, pk=archive_id,user=request.user)
 
     if request.method == "POST":
         archive.delete()
@@ -130,19 +130,38 @@ def search_archives(request):
     query = request.GET.get("q", "")
     results = []
 
+    # if query:
+    #     sql = f"SELECT archiver_archive.*, auth_user.username FROM archiver_archive JOIN auth_user ON archiver_archive.user_id = auth_user.id WHERE archiver_archive.user_id = {request.user.id} AND title LIKE '%{query}%'"
+
+    #     try:
+    #         with connection.cursor() as cursor:
+    #             cursor.execute(sql)
+    #             columns = [col[0] for col in cursor.description]
+    #             results = [dict(zip(columns, row)) for row in cursor.fetchall()]
+    #     except Exception as e:
+    #         messages.error(request, f"SQL Error: {str(e)}")
+
+    # return render(request, "archiver/search.html", {"results": results, "query": query})
     if query:
-        sql = f"SELECT archiver_archive.*, auth_user.username FROM archiver_archive JOIN auth_user ON archiver_archive.user_id = auth_user.id WHERE archiver_archive.user_id = {request.user.id} AND title LIKE '%{query}%'"
+        sql = """
+        SELECT archiver_archive.*, auth_user.username
+        FROM archiver_archive
+        JOIN auth_user ON archiver_archive.user_id = auth_user.id
+        WHERE archiver_archive.user_id = %s
+        AND title LIKE %s
+        """
+
+        params = [request.user.id, f"%{query}%"]
 
         try:
             with connection.cursor() as cursor:
-                cursor.execute(sql)
+                cursor.execute(sql, params)
                 columns = [col[0] for col in cursor.description]
                 results = [dict(zip(columns, row)) for row in cursor.fetchall()]
         except Exception as e:
             messages.error(request, f"SQL Error: {str(e)}")
 
-    return render(request, "archiver/search.html", {"results": results, "query": query})
-
+    return render(requests.request, "archiver/search.html", {"results": results, "query": query})
 
 @login_required
 def ask_database(request):
