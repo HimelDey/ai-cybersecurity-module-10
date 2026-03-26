@@ -163,6 +163,84 @@ def search_archives(request):
 
     return render(requests.request, "archiver/search.html", {"results": results, "query": query})
 
+# @login_required
+# def ask_database(request):
+#     answer = None
+#     sql_query = None
+#     user_input = request.POST.get("prompt", "")
+
+#     if request.method == "POST" and user_input:
+#         # Schema info for the LLM
+#         schema_info = """
+#         Table: archiver_archive
+#         Columns: id, title, url, content, notes, created_at, user_id
+#         """
+
+#         system_prompt = f"""
+#         You are a SQL expert. Convert the user's natural language query into a raw SQLite SQL query.
+#         The table name is 'archiver_archive'.
+#         Do not explain. Return ONLY the SQL query.
+#         Current User ID: {request.user.id}
+#         Schema:
+#         {schema_info}
+#         """
+
+#         # Get SQL from LLM
+#         sql_query = query_llm(user_input, system_instruction=system_prompt).strip()
+
+#         # Clean up markdown code blocks if present
+#         if "```sql" in sql_query:
+#             sql_query = sql_query.split("```sql")[1].split("```")[0].strip()
+#         elif "```" in sql_query:
+#             sql_query = sql_query.split("```")[1].strip()
+
+#         try:
+#             with connection.cursor() as cursor:
+#                 cursor.execute(sql_query)
+#                 if cursor.description:
+#                     columns = [col[0] for col in cursor.description]
+#                     results = [dict(zip(columns, row)) for row in cursor.fetchall()]
+#                     answer = results
+#                 else:
+#                     answer = "Query executed successfully (no results returned)."
+#         except Exception as e:
+#             answer = f"Error executing SQL: {str(e)}"
+
+#     return render(
+#         request,
+#         "archiver/ask_database.html",
+#         {"answer": answer, "sql_query": sql_query, "prompt": user_input},
+#     )
+
+
+def is_safe_sql(query, user_id):
+    query = query.strip().lower()
+
+    # Only allow SELECT
+    if not query.startswith("select"):
+        return False
+
+    # Block dangerous keywords
+    forbidden = ["insert", "update", "delete", "drop", "alter", "pragma", "--"]
+    if any(word in query for word in forbidden):
+        return False
+
+    # Only allow access to archiver_archive
+    if "archiver_archive" not in query:
+        return False
+
+    # Enforce user_id filter
+    if f"user_id = {user_id}" not in query:
+        return False
+
+    return True
+
+
+# def enforce_user_scope(query, user_id):
+#     if "where" in query.lower():
+#         return query + f" AND user_id = {user_id}"
+#     else:
+#         return query + f" WHERE user_id = {user_id}"
 @login_required
 def ask_database(request):
     answer = None
@@ -170,48 +248,58 @@ def ask_database(request):
     user_input = request.POST.get("prompt", "")
 
     if request.method == "POST" and user_input:
-        # Schema info for the LLM
         schema_info = """
         Table: archiver_archive
         Columns: id, title, url, content, notes, created_at, user_id
         """
 
         system_prompt = f"""
-        You are a SQL expert. Convert the user's natural language query into a raw SQLite SQL query.
-        The table name is 'archiver_archive'.
-        Do not explain. Return ONLY the SQL query.
-        Current User ID: {request.user.id}
+        You are a SQL expert. Convert the user's natural language query into a SAFE SQLite SELECT query.
+
+        RULES:
+        - Only SELECT queries allowed
+        - Only use table: archiver_archive
+        - MUST include: user_id = {request.user.id}
+        - No joins, no subqueries, no other tables
+        - No comments or multiple statements
+        - Output ONLY SQL
+
         Schema:
         {schema_info}
         """
 
-        # Get SQL from LLM
         sql_query = query_llm(user_input, system_instruction=system_prompt).strip()
 
-        # Clean up markdown code blocks if present
+        # Clean markdown
         if "```sql" in sql_query:
             sql_query = sql_query.split("```sql")[1].split("```")[0].strip()
         elif "```" in sql_query:
             sql_query = sql_query.split("```")[1].strip()
 
-        try:
-            with connection.cursor() as cursor:
-                cursor.execute(sql_query)
-                if cursor.description:
-                    columns = [col[0] for col in cursor.description]
-                    results = [dict(zip(columns, row)) for row in cursor.fetchall()]
-                    answer = results
-                else:
-                    answer = "Query executed successfully (no results returned)."
-        except Exception as e:
-            answer = f"Error executing SQL: {str(e)}"
+       
+        # sql_query = enforce_user_scope(sql_query, request.user.id)
+
+     
+        if not is_safe_sql(sql_query, request.user.id):
+            answer = "Blocked unsafe query."
+        else:
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute(sql_query)
+                    if cursor.description:
+                        columns = [col[0] for col in cursor.description]
+                        results = [dict(zip(columns, row)) for row in cursor.fetchall()]
+                        answer = results
+                    else:
+                        answer = "Query executed successfully (no results returned)."
+            except Exception as e:
+                answer = f"Error executing SQL: {str(e)}"
 
     return render(
         request,
         "archiver/ask_database.html",
         {"answer": answer, "sql_query": sql_query, "prompt": user_input},
     )
-
 
 @login_required
 def export_summary(request):
